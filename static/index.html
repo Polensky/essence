@@ -63,6 +63,11 @@
     }
     .legend-labels { display: flex; justify-content: space-between; font-size: 11px; color: #666; }
     #stats { margin-top: 8px; font-size: 11px; color: #888; }
+
+    /* Colored pin markers */
+    .pin-icon {
+      filter: drop-shadow(0 1px 3px rgba(0,0,0,0.35));
+    }
   </style>
 </head>
 <body>
@@ -220,7 +225,16 @@
         if (s.regular <= 0 || s.regular > priceMax) return;
         count++;
 
-        const marker = L.marker([s.lat, s.lng]);
+        const color = priceColor(s.regular, minPrice, maxPrice);
+        const icon = L.divIcon({
+          html: pinSvg(color),
+          className: '',
+          iconSize: [25, 41],
+          iconAnchor: [12, 41],
+          popupAnchor: [1, -34],
+        });
+
+        const marker = L.marker([s.lat, s.lng], { icon });
 
         let popup = `<strong>${s.name}</strong><br>`;
         popup += `${s.brand}<br>`;
@@ -234,6 +248,36 @@
       });
 
       document.getElementById('visible-count').textContent = count + ' / ' + allStations.length + ' stations';
+    }
+
+    function pinSvg(fill) {
+      return `<svg class="pin-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 25 41" width="25" height="41">
+        <path d="M12.5 0C5.6 0 0 5.6 0 12.5C0 22 12.5 41 12.5 41S25 22 25 12.5C25 5.6 19.4 0 12.5 0Z"
+              fill="${fill}" stroke="#fff" stroke-width="1.5"/>
+        <circle cx="12.5" cy="12.5" r="5" fill="#fff" opacity="0.9"/>
+      </svg>`;
+    }
+
+    function priceColor(price, min, max) {
+      const t = Math.max(0, Math.min(1, (price - min) / (max - min)));
+      const colors = [
+        [49, 54, 149],
+        [69, 117, 180],
+        [116, 173, 209],
+        [171, 217, 233],
+        [254, 224, 144],
+        [253, 174, 97],
+        [244, 109, 67],
+        [215, 48, 39],
+        [165, 0, 38],
+      ];
+      const idx = Math.min(Math.floor(t * (colors.length - 1)), colors.length - 2);
+      const frac = t * (colors.length - 1) - idx;
+      const c0 = colors[idx], c1 = colors[idx + 1];
+      const r = Math.round(c0[0] + (c1[0] - c0[0]) * frac);
+      const g = Math.round(c0[1] + (c1[1] - c0[1]) * frac);
+      const b = Math.round(c0[2] + (c1[2] - c0[2]) * frac);
+      return `rgb(${r},${g},${b})`;
     }
   </script>
 </body>
