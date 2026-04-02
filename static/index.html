@@ -64,6 +64,13 @@
     .legend-labels { display: flex; justify-content: space-between; font-size: 11px; color: #666; }
     #stats { margin-top: 8px; font-size: 11px; color: #888; }
 
+    #last-updated {
+      position: fixed; bottom: 8px; left: 56px;
+      background: white; padding: 5px 10px;
+      border-radius: 6px; box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+      z-index: 2000; font-size: 11px; color: #666;
+    }
+
     /* Colored pin markers */
     .pin-icon {
       filter: drop-shadow(0 1px 3px rgba(0,0,0,0.35));
@@ -88,6 +95,8 @@
     </div>
     <div id="visible-count"></div>
   </div>
+
+  <div id="last-updated"></div>
 
   <div id="legend">
     <h3>Prix régulier (¢/L)</h3>
@@ -126,9 +135,20 @@
 
     fetch('/api/stations')
       .then(r => r.json())
-      .then(stations => {
+      .then(data => {
         document.getElementById('loading').style.display = 'none';
+        const stations = data.stations;
         allStations = stations;
+
+        // Last updated
+        if (data.lastUpdated) {
+          const d = new Date(data.lastUpdated);
+          document.getElementById('last-updated').textContent =
+            'Dernière mise à jour: ' + d.toLocaleString('fr-CA', {
+              year: 'numeric', month: 'long', day: 'numeric',
+              hour: '2-digit', minute: '2-digit',
+            });
+        }
 
         const prices = stations.map(s => s.regular).filter(p => p > 0);
         minPrice = Math.min(...prices);

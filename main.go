@@ -9,8 +9,11 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path"
+	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/xuri/excelize/v2"
 )
@@ -34,6 +37,11 @@ type Station struct {
 	Regular    float64 `json:"regular"`
 	Super      float64 `json:"super"`
 	Diesel     float64 `json:"diesel"`
+}
+
+type StationsResponse struct {
+	LastUpdated string    `json:"lastUpdated"`
+	Stations    []Station `json:"stations"`
 }
 
 func main() {
@@ -61,9 +69,14 @@ func handleStations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	resp := StationsResponse{
+		LastUpdated: parseTimestampFromURL(dataURL),
+		Stations:    stations,
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
-	json.NewEncoder(w).Encode(stations)
+	json.NewEncoder(w).Encode(resp)
 }
 
 func fetchAndParse() ([]Station, error) {
@@ -168,4 +181,28 @@ func parsePrice(s string) float64 {
 		return 0
 	}
 	return v
+}
+
+var tsRegex = regexp.MustCompile(`(\d{14})`)
+
+// parseTimestampFromURL extracts a YYYYMMDDHHmmSS timestamp from the URL
+// filename and returns it as a human-readable string.
+func parseTimestampFromURL(rawURL string) string {
+	base := path.Base(rawURL)
+	match := tsRegex.FindString(base)
+	if match == "" {
+		return ""
+	}
+
+	loc, err := time.LoadLocation("America/Montreal")
+	if err != nil {
+		loc = time.UTC
+	}
+
+	t, err := time.ParseInLocation("20060102150405", match, loc)
+	if err != nil {
+		return ""
+	}
+
+	return t.Format(time.RFC3339)
 }
