@@ -27,5 +27,7 @@
           vendorHash = null; # Will need updating after go mod tidy
         };
       }
-    );
+    ) // {
+      nixosModules.default = import ./nixos-module.nix { inherit self; };
+    };
 }
