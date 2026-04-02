@@ -24,7 +24,7 @@
           pname = "essence";
           version = "0.1.0";
           src = ./.;
-          vendorHash = null; # Will need updating after go mod tidy
+          vendorHash = "sha256-iiobqg0INKuzTyC/VMGcX5CfroqqbKnwlJLVAOCZbEE=";
         };
       }
     ) // {
