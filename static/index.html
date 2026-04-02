@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Essence Québec - Carte des prix</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    #map { width: 100vw; height: 100vh; }
+
+    #loading {
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(255, 255, 255, 0.9);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 10000; font-size: 1.2em; color: #333;
+    }
+
+    /* Controls panel (top-left) */
+    #controls {
+      position: fixed; top: 12px; left: 56px;
+      background: white; padding: 10px 14px;
+      border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+      z-index: 1000; font-size: 13px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .mode-btn {
+      padding: 5px 12px; border: 1px solid #ccc; border-radius: 4px;
+      background: #f5f5f5; cursor: pointer; font-size: 13px;
+      transition: all 0.15s;
+    }
+    .mode-btn:hover { background: #e8e8e8; }
+    .mode-btn.active { background: #095797; color: white; border-color: #095797; }
+
+    /* Slider panel (top-left, below controls, stations mode only) */
+    #slider-panel {
+      position: fixed; top: 56px; left: 56px;
+      background: white; padding: 10px 14px;
+      border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+      z-index: 1000; font-size: 13px; min-width: 260px;
+      display: none;
+    }
+    #slider-panel label { display: block; margin-bottom: 6px; font-weight: 600; }
+    #price-slider { width: 100%; cursor: pointer; }
+    #slider-value { display: flex; justify-content: space-between; margin-top: 4px; font-size: 11px; color: #666; }
+    #visible-count { margin-top: 6px; font-size: 11px; color: #888; }
+
+    /* Legend (bottom-right, heatmap mode only) */
+    #legend {
+      position: fixed; bottom: 20px; right: 20px;
+      background: white; padding: 12px 16px;
+      border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+      z-index: 1000; font-size: 13px; min-width: 180px;
+    }
+    #legend h3 { margin-bottom: 8px; font-size: 14px; }
+    .legend-gradient {
+      height: 16px; border-radius: 4px;
+      background: linear-gradient(to right, #313695, #4575b4, #74add1, #abd9e9, #fee090, #fdae61, #f46d43, #d73027, #a50026);
+      margin-bottom: 4px;
+    }
+    .legend-labels { display: flex; justify-content: space-between; font-size: 11px; color: #666; }
+    #stats { margin-top: 8px; font-size: 11px; color: #888; }
+  </style>
+</head>
+<body>
+  <div id="loading">Chargement des données...</div>
+  <div id="map"></div>
+
+  <div id="controls">
+    <button class="mode-btn active" data-mode="heatmap">Heatmap</button>
+    <button class="mode-btn" data-mode="stations">Stations</button>
+  </div>
+
+  <div id="slider-panel">
+    <label for="price-slider">Prix max: <span id="slider-label">-</span></label>
+    <input type="range" id="price-slider" min="0" max="300" step="0.5" value="300">
+    <div id="slider-value">
+      <span id="slider-min">-</span>
+      <span id="slider-max">-</span>
+    </div>
+    <div id="visible-count"></div>
+  </div>
+
+  <div id="legend">
+    <h3>Prix régulier (¢/L)</h3>
+    <div class="legend-gradient"></div>
+    <div class="legend-labels">
+      <span id="min-price">-</span>
+      <span id="max-price">-</span>
+    </div>
+    <div id="stats"></div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+  <script>
+    const map = L.map('map').setView([46.8, -71.2], 7);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> | Données: <a href="https://regieessencequebec.ca">Régie de l\'énergie du Québec</a>',
+      maxZoom: 18,
+    }).addTo(map);
+
+    // State
+    let currentMode = 'heatmap';
+    let allStations = [];
+    let minPrice = 0;
+    let maxPrice = 300;
+    let heatLayer = null;
+    let stationMarkers = L.layerGroup();
+
+    fetch('/api/stations')
+      .then(r => r.json())
+      .then(stations => {
+        document.getElementById('loading').style.display = 'none';
+        allStations = stations;
+
+        const prices = stations.map(s => s.regular).filter(p => p > 0);
+        minPrice = Math.min(...prices);
+        maxPrice = Math.max(...prices);
+
+        // Legend
+        document.getElementById('min-price').textContent = minPrice.toFixed(1) + '¢';
+        document.getElementById('max-price').textContent = maxPrice.toFixed(1) + '¢';
+        document.getElementById('stats').textContent = stations.length + ' stations';
+
+        // Slider setup
+        const slider = document.getElementById('price-slider');
+        slider.min = Math.floor(minPrice);
+        slider.max = Math.ceil(maxPrice);
+        slider.value = Math.ceil(maxPrice);
+        document.getElementById('slider-min').textContent = Math.floor(minPrice) + '¢';
+        document.getElementById('slider-max').textContent = Math.ceil(maxPrice) + '¢';
+        document.getElementById('slider-label').textContent = Math.ceil(maxPrice) + '¢/L';
+
+        // Build heatmap layer
+        const heatData = stations
+          .filter(s => s.regular > 0)
+          .map(s => {
+            const intensity = (s.regular - minPrice) / (maxPrice - minPrice);
+            return [s.lat, s.lng, intensity];
+          });
+
+        heatLayer = L.heatLayer(heatData, {
+          radius: 25,
+          blur: 20,
+          maxZoom: 12,
+          max: 1.0,
+          gradient: {
+            0.0: '#313695',
+            0.1: '#4575b4',
+            0.2: '#74add1',
+            0.3: '#abd9e9',
+            0.4: '#e0f3f8',
+            0.5: '#fee090',
+            0.6: '#fdae61',
+            0.7: '#f46d43',
+            0.8: '#d73027',
+            1.0: '#a50026',
+          }
+        });
+
+        // Build all station markers
+        buildStationMarkers(maxPrice);
+
+        // Start in heatmap mode
+        setMode('heatmap');
+
+        // Slider events
+        slider.addEventListener('input', () => {
+          const val = parseFloat(slider.value);
+          document.getElementById('slider-label').textContent = val.toFixed(1) + '¢/L';
+          buildStationMarkers(val);
+          if (currentMode === 'stations') {
+            map.removeLayer(stationMarkers);
+            map.addLayer(stationMarkers);
+          }
+        });
+      })
+      .catch(err => {
+        document.getElementById('loading').textContent = 'Erreur: ' + err.message;
+      });
+
+    // Mode toggle buttons
+    document.querySelectorAll('.mode-btn').forEach(btn => {
+      btn.addEventListener('click', () => setMode(btn.dataset.mode));
+    });
+
+    function setMode(mode) {
+      currentMode = mode;
+
+      document.querySelectorAll('.mode-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.mode === mode);
+      });
+
+      if (mode === 'heatmap') {
+        map.removeLayer(stationMarkers);
+        if (heatLayer) map.addLayer(heatLayer);
+        document.getElementById('legend').style.display = '';
+        document.getElementById('slider-panel').style.display = 'none';
+      } else {
+        if (heatLayer) map.removeLayer(heatLayer);
+        map.addLayer(stationMarkers);
+        document.getElementById('legend').style.display = 'none';
+        document.getElementById('slider-panel').style.display = '';
+      }
+    }
+
+    function buildStationMarkers(priceMax) {
+      stationMarkers.clearLayers();
+      let count = 0;
+
+      allStations.forEach(s => {
+        if (s.regular <= 0 || s.regular > priceMax) return;
+        count++;
+
+        const color = priceColor(s.regular, minPrice, maxPrice);
+        const marker = L.circleMarker([s.lat, s.lng], {
+          radius: 7,
+          fillColor: color,
+          color: '#fff',
+          weight: 1.5,
+          fillOpacity: 0.9,
+        });
+
+        let popup = `<strong>${s.name}</strong><br>`;
+        popup += `${s.brand}<br>`;
+        popup += `${s.address}<br>`;
+        popup += `<br><strong>Régulier:</strong> ${s.regular.toFixed(1)}¢/L`;
+        if (s.super > 0) popup += `<br><strong>Super:</strong> ${s.super.toFixed(1)}¢/L`;
+        if (s.diesel > 0) popup += `<br><strong>Diesel:</strong> ${s.diesel.toFixed(1)}¢/L`;
+        marker.bindPopup(popup);
+
+        stationMarkers.addLayer(marker);
+      });
+
+      document.getElementById('visible-count').textContent = count + ' / ' + allStations.length + ' stations';
+    }
+
+    function priceColor(price, min, max) {
+      const t = Math.max(0, Math.min(1, (price - min) / (max - min)));
+      const colors = [
+        [49, 54, 149],
+        [69, 117, 180],
+        [116, 173, 209],
+        [171, 217, 233],
+        [254, 224, 144],
+        [253, 174, 97],
+        [244, 109, 67],
+        [215, 48, 39],
+        [165, 0, 38],
+      ];
+      const idx = Math.min(Math.floor(t * (colors.length - 1)), colors.length - 2);
+      const frac = t * (colors.length - 1) - idx;
+      const c0 = colors[idx], c1 = colors[idx + 1];
+      const r = Math.round(c0[0] + (c1[0] - c0[0]) * frac);
+      const g = Math.round(c0[1] + (c1[1] - c0[1]) * frac);
+      const b = Math.round(c0[2] + (c1[2] - c0[2]) * frac);
+      return `rgb(${r},${g},${b})`;
+    }
+  </script>
+</body>
+</html>
