@@ -1,3 +1,4 @@
 /essence
 /result
 *.db
+.direnv/
