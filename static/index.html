@@ -334,7 +334,12 @@
       <div id="page-stats">
         <h2>Statistiques des prix</h2>
 
-        <!-- Summary cards -->
+        <!-- Region filter -->
+        <div style="margin-bottom: 20px;">
+          <select id="stats-region-select" style="padding: 6px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: 6px; background: var(--secondary); color: var(--secondary-foreground); cursor: pointer; min-width: 220px;">
+            <option value="">Toutes les régions</option>
+          </select>
+        </div>
         <div class="stat-cards">
           <article class="card">
             <header><p>Régulier — Moyenne</p></header>
@@ -418,6 +423,7 @@
     let mapInitialized = false;
     let statsChart = null;
     let currentDays = 7;
+    let stationDeltas = {}; // address → {regular, super, diesel} pct change or null
 
     function showPage(name) {
       document.getElementById('page-map').style.display   = name === 'map'   ? 'flex' : 'none';
@@ -431,6 +437,7 @@
         setTimeout(() => map.invalidateSize(), 50);
       }
       if (name === 'stats') {
+        loadStatsRegions();
         loadStats(currentDays);
       }
     }
@@ -485,12 +492,15 @@
       },
     });
 
-    fetch('/api/stations')
-      .then(r => r.json())
-      .then(data => {
+    Promise.all([
+      fetch('/api/stations').then(r => r.json()),
+      fetch('/api/station-deltas').then(r => r.json()).catch(() => ({})),
+    ])
+      .then(([data, deltas]) => {
         document.getElementById('loading').style.display = 'none';
         mapInitialized = true;
         allStations = data.stations;
+        stationDeltas = deltas || {};
 
         // Populate region dropdown from data
         const regions = [...new Set(allStations.map(s => s.region).filter(Boolean))].sort();
@@ -634,10 +644,13 @@
         });
         const marker = L.marker([s.lat, s.lng], { icon });
         marker.fuelPrices = { regular: s.regular, super: s.super, diesel: s.diesel };
-        let popup = `<strong>${s.name}</strong><br>${s.brand}<br>${s.address}<br>`;
-        popup += `<br><strong>Régulier:</strong> ${s.regular.toFixed(1)}¢/L`;
-        if (s.super  > 0) popup += `<br><strong>Super:</strong> ${s.super.toFixed(1)}¢/L`;
-        if (s.diesel > 0) popup += `<br><strong>Diesel:</strong> ${s.diesel.toFixed(1)}¢/L`;
+        const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(s.address + ', Québec')}`;
+        const d = stationDeltas[s.address] || {};
+        const eh = d.elapsedHours != null ? d.elapsedHours : null;
+        let popup = `<strong>${s.name}</strong><br>${brandBadgeHtml(s.brand)}<br><a href="${mapsUrl}" target="_blank" rel="noopener">${s.address}</a><br>`;
+        popup += `<br><strong>Régulier:</strong> ${s.regular.toFixed(1)}¢/L${priceDeltaHtml(d.regular, eh)}`;
+        if (s.super  > 0) popup += `<br><strong>Super:</strong> ${s.super.toFixed(1)}¢/L${priceDeltaHtml(d.super, eh)}`;
+        if (s.diesel > 0) popup += `<br><strong>Diesel:</strong> ${s.diesel.toFixed(1)}¢/L${priceDeltaHtml(d.diesel, eh)}`;
         marker.bindPopup(popup);
         return marker;
       });
@@ -664,7 +677,93 @@
       return `rgb(${Math.round(c0[0]+(c1[0]-c0[0])*frac)},${Math.round(c0[1]+(c1[1]-c0[1])*frac)},${Math.round(c0[2]+(c1[2]-c0[2])*frac)})`;
     }
 
+    // ── Brand colours ─────────────────────────────────────────
+    // Real brand identity colours where known; others get a
+    // deterministic colour picked from a curated distinct-hue palette.
+    const BRAND_COLORS = {
+      'ultramar':       '#0057a8',
+      'petro-canada':   '#e4002b',
+      'esso':           '#003087',
+      'shell':          '#dd1d21',
+      'pioneer':        '#f47920',
+      'couche-tard':    '#c8102e',
+      'circle k':       '#c8102e',
+      'crevier':        '#e3000f',
+      'irving':         '#006747',
+      'gilbert':        '#00796b',
+      'sonic':          '#7b2d8b',
+      'dépanneur':      '#475569',
+      'indépendant':    '#334155',
+    };
+
+    // 12-colour fallback palette for unknown brands (evenly spaced hues,
+    // all with sufficient contrast against white).
+    const FALLBACK_PALETTE = [
+      '#b45309','#0369a1','#065f46','#7c3aed',
+      '#be185d','#0f766e','#b91c1c','#1d4ed8',
+      '#15803d','#a21caf','#c2410c','#0e7490',
+    ];
+
+    // Return the background hex colour for a brand name.
+    function brandColor(brand) {
+      const key = (brand || '').toLowerCase().trim();
+      if (BRAND_COLORS[key]) return BRAND_COLORS[key];
+      let h = 0;
+      for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) & 0xffff;
+      return FALLBACK_PALETTE[h % FALLBACK_PALETTE.length];
+    }
+
+    // WCAG relative luminance of a hex colour string.
+    function luminance(hex) {
+      const r = parseInt(hex.slice(1,3), 16) / 255;
+      const g = parseInt(hex.slice(3,5), 16) / 255;
+      const b = parseInt(hex.slice(5,7), 16) / 255;
+      const lin = c => c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+      return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+    }
+
+    // Pick white or black foreground for best contrast against bg.
+    function contrastFg(bgHex) {
+      const L = luminance(bgHex);
+      const onWhite = (L + 0.05) / (0.05);        // contrast vs white
+      const onBlack = (1.05)     / (L + 0.05);    // contrast vs black
+      return onBlack > onWhite ? '#ffffff' : '#000000';
+    }
+
+    function brandBadgeHtml(brand) {
+      if (!brand) return '';
+      const bg = brandColor(brand);
+      const fg = contrastFg(bg);
+      return `<span class="badge" style="--primary:${bg};--primary-foreground:${fg}">${brand}</span>`;
+    }
+
+    // Returns an inline HTML snippet showing the 24h price change.
+    // pct is a number (percentage) or null/undefined when no history is available.
+    function priceDeltaHtml(pct, elapsedHours) {
+      if (pct == null) return '';
+      if (Math.abs(pct) < 0.05) return ''; // treat sub-0.05% as unchanged
+      const up    = pct > 0;
+      const color = up ? '#dc2626' : '#16a34a'; // red up, green down
+      const arrow = up
+        ? '<svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,8 5,2 8,8"/></svg>'
+        : '<svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,2 5,8 8,2"/></svg>';
+      const sign  = up ? '+' : '';
+      let timeLabel;
+      if (elapsedHours == null) {
+        timeLabel = '';
+      } else if (elapsedHours < 1) {
+        timeLabel = ' (< 1h)';
+      } else {
+        const h = Math.min(24, Math.round(elapsedHours));
+        timeLabel = ` (${h}h)`;
+      }
+      return ` <span style="color:${color};font-size:11px;white-space:nowrap;">${arrow}${sign}${pct.toFixed(2)}%${timeLabel}</span>`;
+    }
+
     // ── Statistics page ───────────────────────────────────────
+    let currentStatsRegion = '';
+    let statsRegionsLoaded = false;
+
     document.querySelectorAll('.range-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('active'));
@@ -674,8 +773,33 @@
       });
     });
 
+    function loadStatsRegions() {
+      if (statsRegionsLoaded) return;
+      fetch('/api/regions')
+        .then(r => r.json())
+        .then(regions => {
+          statsRegionsLoaded = true;
+          const sel = document.getElementById('stats-region-select');
+          regions.forEach(region => {
+            const opt = document.createElement('option');
+            opt.value = region;
+            opt.textContent = region;
+            sel.appendChild(opt);
+          });
+        })
+        .catch(err => console.error('regions error:', err));
+    }
+
+    document.getElementById('stats-region-select').addEventListener('change', function() {
+      currentStatsRegion = this.value;
+      loadStats(currentDays);
+    });
+
     function loadStats(days) {
-      const url = '/api/stats?days=' + days;
+      const region = currentStatsRegion;
+      const url = region
+        ? '/api/stats/region?region=' + encodeURIComponent(region) + '&days=' + days
+        : '/api/stats?days=' + days;
       fetch(url)
         .then(r => r.json())
         .then(data => {
